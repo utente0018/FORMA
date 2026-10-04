@@ -1,7 +1,7 @@
 // Service worker: l'app funziona offline. Con la rete prende sempre l'ultima versione;
 // senza rete usa la copia salvata. Le immagini degli esercizi si salvano la prima volta che le vedi.
 // I tuoi dati NON stanno qui: sono nel database del telefono e gli aggiornamenti non li toccano.
-const SHELL = 'forma-shell-v2';
+const SHELL = 'forma-shell-v3';
 const MEDIA = 'forma-media-v1';
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'plan.js', 'manifest.webmanifest', 'data/exercises.json', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 

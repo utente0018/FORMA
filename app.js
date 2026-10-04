@@ -316,27 +316,33 @@ function startTimer(sec) {
   try { localStorage.setItem('forma:timer', JSON.stringify(T)); } catch { }
   tick();
 }
-function stopTimer() { T = null; const b = $('#timerbar'); b.classList.remove('done'); b.innerHTML = ''; try { localStorage.removeItem('forma:timer'); } catch { } tick(); }
+function stopTimer() { T = null; const b = $('#timerbar'); b.dataset.mode = ''; b.className = ''; b.innerHTML = ''; try { localStorage.removeItem('forma:timer'); } catch { } tick(); }
 function adjustTimer(d) { if (!T) return; if (T.alerted) { startTimer(Math.max(5, d)); return; } T.end += d * 1000; T.total = Math.max(5, T.total + d); if (T.end < Date.now()) T.end = Date.now(); tick(); }
+function nextUpText() {
+  const s = activeSession(); if (!s) return '';
+  const ei = currentEx(s); if (ei < 0) return 'Ultima serie fatta: chiudi con "Fine"';
+  const ex = s.exercises[ei], si = ex.sets.findIndex(x => !x.done), ph = setPlaceholders(s, ei, si);
+  return `Prossima: ${exName(ex)} · serie ${si + 1} di ${ex.sets.length}${ph.reps ? ` · ${ph.kg ? fmt(ph.kg) + ' kg' : 'CL'} × ${ph.reps}` : ''}`;
+}
+function timerLayout(mode) {
+  if (mode === 'big') return `<div class="tp-row"><span class="tp-lbl">RECUPERO</span><button class="tp-skip" data-a="timerStop">Salta ›</button></div><div class="tp-main"><button class="tp-b" data-a="timerPlus" data-d="-15">−15</button><div class="t tp-time num"></div><button class="tp-b" data-a="timerPlus" data-d="15">+15</button></div><div class="tp-next"></div><div class="prog"></div>`;
+  if (mode === 'big-done') return `<div class="tp-go">VAI! 💪</div><div class="tp-next"></div><div class="row" style="gap:8px;margin-top:6px"><button class="tp-b grow" data-a="timerPlus" data-d="30">+30 s</button><button class="tp-b grow" data-a="timerStop">OK</button></div>`;
+  if (mode === 'small-done') return `<div class="grow"><b style="font-size:18px">Recupero finito</b><div style="font-size:13px;opacity:.75">Vai con la prossima serie</div></div><button class="btn sm" data-a="timerPlus" data-d="30">+30 s</button><button class="btn sm" data-a="timerStop">OK</button>`;
+  return `<div class="t num"></div><div class="grow small">Recupero</div><button class="btn sm" data-a="timerPlus" data-d="-15">−15</button><button class="btn sm" data-a="timerPlus" data-d="15">+15</button><button class="btn sm" data-a="timerStop">Salta</button><div class="prog"></div>`;
+}
 function tick() {
   const bar = $('#timerbar');
-  if (!T) { bar.hidden = true; return; }
-  const rem = (T.end - Date.now()) / 1000;
-  bar.hidden = false;
-  bar.classList.toggle('in-session', !$('#session').hidden);
-  if (rem <= 0) {
+  if (!T) { bar.hidden = true; bar.dataset.mode = ''; document.body.classList.remove('timer-on'); return; }
+  const rem = (T.end - Date.now()) / 1000, big = !$('#session').hidden, done = rem <= 0;
+  if (done) {
     if (!T.alerted) { T.alerted = true; T.doneAt = Date.now(); if (-rem < 10) { beep(); buzz([200, 100, 200, 100, 300]); } }
-    if (Date.now() - T.doneAt > 9000) { stopTimer(); return; }
-    if (bar.classList.contains('done')) return;
-    bar.classList.add('done');
-    bar.innerHTML = `<div class="grow"><b style="font-size:18px">Recupero finito</b><div style="font-size:13px;opacity:.75">Vai con la prossima serie</div></div><button class="btn sm" data-a="timerPlus" data-d="30">+30 s</button><button class="btn sm" data-a="timerStop">OK</button>`;
-    return;
+    if (Date.now() - T.doneAt > (big ? 20000 : 9000)) { stopTimer(); return; }
   }
-  if (bar.classList.contains('done')) { bar.classList.remove('done'); bar.innerHTML = ''; }
-  const pct = clamp(1 - rem / T.total, 0, 1) * 100;
-  if (!$('.t', bar)) bar.innerHTML = `<div class="t num"></div><div class="grow small">Recupero</div><button class="btn sm" data-a="timerPlus" data-d="-15">−15</button><button class="btn sm" data-a="timerPlus" data-d="15">+15</button><button class="btn sm" data-a="timerStop">Salta</button><div class="prog"></div>`;
-  $('.t', bar).textContent = mmss(Math.ceil(rem));
-  $('.prog', bar).style.width = pct + '%';
+  bar.hidden = false; document.body.classList.add('timer-on');
+  const mode = (big ? 'big' : 'small') + (done ? '-done' : '');
+  if (bar.dataset.mode !== mode) { bar.dataset.mode = mode; bar.className = mode; bar.innerHTML = timerLayout(mode); }
+  if (!done) { $('.t', bar).textContent = mmss(Math.ceil(rem)); $('.prog', bar).style.width = clamp(1 - rem / T.total, 0, 1) * 100 + '%'; }
+  const nx = $('.tp-next', bar); if (nx) { const t = nextUpText(); if (nx.textContent !== t) nx.textContent = t; }
 }
 setInterval(() => { tick(); const el = $('#elapsed'); const s = activeSession(); if (el && s) el.textContent = mmss((Date.now() - s.start) / 1000); }, 250);
 
@@ -360,29 +366,35 @@ function go(t) { tab = t; history.replaceState(null, '', '#' + t); render(); win
 const VIEWS = {}, MOUNT = {};
 
 /* ===== OGGI ===== */
+function routinePreview(r) {
+  return `<div class="plist">${r.items.map((it, i) => { const last = lastSetsFor(it.exId); const kg = last ? Math.max(...last.sets.map(x => x.kg || 0)) : it.kg; const reps = it.repMin ? `${it.repMin}${it.repMax && it.repMax !== it.repMin ? '–' + it.repMax : ''}` : '?'; return `<div class="pl"><span class="pn">${i + 1}</span><span class="grow" style="min-width:0">${esc(exName(it))}</span><span class="num pk">${it.sets}×${reps}<br><b>${kg ? fmt(kg) + ' kg' : kg === 0 ? 'CL' : '–'}</b></span></div>`; }).join('')}</div>`;
+}
+function nextRoutineDay(k) { for (let i = 1; i <= 7; i++) { const kk = addDays(k, i), r = routinesFor(kk); if (r.length) return { k: kk, r: r[0] }; } return null; }
 VIEWS.oggi = () => {
   const k = todayKey(), b = S.body[k] || {}, act = activeSession();
   const rts = routinesFor(k);
   const wPts = series('w'), avg = avgAround(wPts, k), prevAvg = avgAround(wPts, addDays(k, -7));
   let h = `<div class="sub">${longDate(k)}</div><h1>${greeting()}</h1>`;
   if (!isStandalone() && !S.settings.installHidden) h += `<div class="card tight mt"><div class="between"><div class="small" style="color:var(--text)">Per usarla come un'app: tocca <b>Condividi</b> in Safari → <b>Aggiungi alla schermata Home</b>.</div><button class="icon-btn" data-a="hideInstall">${ic('x')}</button></div></div>`;
-  h += `<h2>Allenamento</h2>`;
-  if (act) h += `<div class="card hero"><div class="small">In corso · <span class="num">${dur(Date.now() - act.start)}</span></div><h3 class="mt" style="font-size:22px">${esc(act.name)}</h3><div class="small">${sessionSets(act)} serie completate</div><button class="btn primary block mt2" data-a="openSession">Riprendi allenamento</button></div>`;
+  h += `<h2>Allenamento di oggi</h2>`;
+  if (act) h += `<div class="card hero"><div class="small">In corso · <span class="num">${dur(Date.now() - act.start)}</span></div><h3 class="mt" style="font-size:21px">${esc(act.name)}</h3><div class="small">${sessionSets(act)} serie completate</div><button class="btn primary block mt2" data-a="openSession">Riprendi allenamento</button></div>`;
   else if (trainedOn(k)) { const s = S.sessions.filter(s => s.date === k && s.end).pop(); h += `<div class="card"><div class="row"><span class="tag acc">Fatto ✓</span><span class="small">${dur(s.end - s.start)}</span></div><h3 class="mt" style="font-size:20px">${esc(s.name)}</h3><div class="small">${sessionSets(s)} serie · ${fmtInt(sessionVolume(s))} kg di volume</div><button class="btn block mt" data-a="freeWorkout">Altro allenamento</button></div>`; }
-  else if (rts.length) h += rts.map(r => `<div class="card hero"><div class="small">In programma oggi</div><h3 class="mt" style="font-size:22px">${esc(r.name)}</h3><div class="small">${r.items.length} esercizi · ${r.items.reduce((a, i) => a + i.sets, 0)} serie</div><button class="btn primary block mt2" data-a="startRoutine" data-id="${r.id}">Inizia allenamento</button></div>`).join('');
-  else h += `<div class="card"><h3>Giorno di riposo</h3><div class="small">${S.routines.length ? 'Nessuna scheda assegnata a oggi.' : 'Crea la tua prima scheda nella sezione Allenamento.'}</div><div class="row mt"><button class="btn grow" data-a="freeWorkout">Allenamento libero</button>${S.routines.length ? '' : `<button class="btn primary grow" data-a="tab" data-t="allena">Crea scheda</button>`}</div></div>`;
+  else if (rts.length) h += rts.map(r => `<div class="card hero"><h3 style="font-size:21px;line-height:1.2">${esc(r.name)}</h3><div class="small" style="margin-top:4px">${r.items.length} esercizi · ${r.items.reduce((a, i) => a + i.sets, 0)} serie</div><button class="btn primary block mt" data-a="startRoutine" data-id="${r.id}">▶ Inizia allenamento</button>${routinePreview(r)}</div>`).join('');
+  else { const nx = nextRoutineDay(k); h += `<div class="card"><h3>Giorno di riposo 😴</h3>${nx ? `<div class="small" style="margin-top:4px">Prossimo allenamento: <b style="color:var(--text)">${relDate(nx.k)}</b> — ${esc(nx.r.short || nx.r.name)}</div>` : `<div class="small">${S.routines.length ? 'Nessuna scheda assegnata a oggi.' : 'Crea la tua prima scheda nella sezione Allenamento.'}</div>`}<button class="btn block mt" data-a="freeWorkout">Allenamento libero</button></div>`; }
+
+  // --- cosa mangi oggi ---
+  const d = dayDiary(k);
+  h += `<div class="between"><h2>Cosa mangi oggi</h2><button class="btn ghost sm" data-a="tab" data-t="dieta">Dieta ›</button></div>`;
+  h += kcalCard(k, false);
+  const blocks = MEALS.map(([m, l]) => mealBlock(k, m, l, false)).join('');
+  h += blocks || `<div class="card small">Nessun piano alimentare per oggi. <span class="link" data-a="planSheetAll">Imposta il piano</span></div>`;
+  h += `<div class="card tight"><div class="between"><div class="row">${ic('drop')}<span><b class="num">${d.water || 0}</b> / ${S.settings.waterTarget} bicchieri d'acqua</span></div><button class="btn sm primary" data-a="water" data-k="${k}" data-d="1">+1</button></div></div>`;
 
   h += `<h2>Peso di stamattina</h2><div class="card">`;
   if (b.w != null) h += `<div class="between"><div class="stat">${fmt(b.w)}<small>kg</small></div><button class="btn sm" data-a="editBody" data-k="${k}">Modifica</button></div><div class="small mt">Media 7 giorni <b class="num" style="color:var(--text)">${fmt(avg, 2)} kg</b> ${deltaHtml(avg, prevAvg, ' kg/sett.')}</div>`;
-  else h += `<div class="row"><div class="unit-wrap grow"><input class="input big" id="qw" inputmode="decimal" placeholder="${fmt(wPts.length ? wPts[wPts.length - 1].y : 75)}"><span class="unit">kg</span></div></div><button class="btn primary block mt" data-a="quickWeight">Salva peso</button><div class="small mt center">Appena sveglio, dopo il bagno, prima di mangiare.</div>`;
+  else h += `<div class="row"><div class="unit-wrap grow"><input class="input big" id="qw" inputmode="decimal" placeholder="${fmt(wPts.length ? wPts[wPts.length - 1].y : S.settings.start?.w ?? 75)}"><span class="unit">kg</span></div></div><button class="btn primary block mt" data-a="quickWeight">Salva peso</button><div class="small mt center">Appena sveglio, dopo il bagno, prima di mangiare.</div>`;
   h += `</div>`;
-
-  h += `<h2>Misure di oggi</h2><div class="card"><div class="grid2"><label class="field"><span>Girovita (ombelico)</span><div class="unit-wrap"><input class="input" id="qwaist" inputmode="decimal" value="${iv(b.waist)}" placeholder="–"><span class="unit">cm</span></div></label><label class="field"><span>Bicipite</span><div class="unit-wrap"><input class="input" id="qbicep" inputmode="decimal" value="${iv(b.bicep)}" placeholder="–"><span class="unit">cm</span></div></label></div><button class="btn block" data-a="quickMeasure">Salva misure</button></div>`;
-
-  const d = dayDiary(k), tot = totals(d.items), tg = targetFor(k);
-  h += `<h2>Dieta</h2><div class="card tap" data-a="tab" data-t="dieta">${tg ? `<div class="between"><div><span class="stat md">${fmtInt(tot.kcal)}</span><span class="small"> / ${fmtInt(tg.kcal)} kcal</span></div><span class="small">${tg.kcal - tot.kcal >= 0 ? `ne restano <b class="num" style="color:var(--text)">${fmtInt(tg.kcal - tot.kcal)}</b>` : `<span style="color:var(--warn)">+${fmtInt(tot.kcal - tg.kcal)} oltre</span>`}</span></div><div class="bar mt"><i style="width:${clamp(tot.kcal / tg.kcal * 100, 0, 100)}%"></i></div>${macroRows(tot, tg)}` : `<div class="between"><div><span class="stat md">${fmtInt(tot.kcal)}</span><span class="small"> kcal oggi</span></div><span class="link small">Imposta obiettivi</span></div>`}</div>`;
-  h += `<div class="card tight"><div class="between"><div class="row">${ic('drop')}<span><b class="num">${d.water || 0}</b> / ${S.settings.waterTarget} bicchieri d'acqua</span></div><button class="btn sm primary" data-a="water" data-k="${k}" data-d="1">+1</button></div></div>`;
-
+  h += `<h2>Misure di oggi</h2><div class="card"><div class="grid2"><label class="field"><span>Girovita (ombelico)</span><div class="unit-wrap"><input class="input" id="qwaist" inputmode="decimal" value="${iv(b.waist)}" placeholder="–"><span class="unit">cm</span></div></label><label class="field"><span>Bicipite (contratto)</span><div class="unit-wrap"><input class="input" id="qbicep" inputmode="decimal" value="${iv(b.bicep)}" placeholder="–"><span class="unit">cm</span></div></label></div><button class="btn block" data-a="quickMeasure">Salva misure</button></div>`;
   h += `<h2>Costanza · ultime 4 settimane</h2><div class="card">${heatmap()}</div>`;
   return h;
 };
@@ -512,23 +524,37 @@ function bodyListHtml() {
 }
 
 /* ===== DIETA ===== */
+function mealBlock(k, m, label, editable) {
+  const items = dayDiary(k).items.filter(i => i.meal === m), plan = planFor(k, m);
+  if (!items.length && !plan.length) return '';
+  const eaten = items.length > 0;
+  const rows = eaten ? items : plan.map(it => ({ ...freshItem(it), qty: it.qty, unit: it.unit }));
+  const t = totals(rows);
+  return `<div class="meal ${eaten ? 'done' : ''}">
+    <div class="meal-h"><div class="grow"><div class="meal-t">${label}</div><div class="small num">${fmtInt(t.kcal)} kcal · ${fmtInt(t.p)} g proteine${eaten ? '' : ' · <span style="color:var(--accent)">da piano</span>'}</div></div>
+    ${eaten ? `<span class="meal-ok">${ic('check', 3)} Mangiato</span>` : `<button class="btn sm primary" data-a="planEatK" data-k="${k}" data-m="${m}">${ic('check', 2.8)} Fatto</button>`}</div>
+    <div class="frows">${rows.map(r => `<div class="fr${editable && r.id ? ' tap' : ''}"${editable && r.id ? ` data-a="editItem" data-id="${r.id}"` : ''}><span class="fn">${esc(r.name)}</span><span class="fq num">${qtyLbl(r.qty, r.unit)}</span></div>`).join('')}</div>
+    ${editable ? `<div class="meal-f"><button class="btn ghost sm" data-a="addFood" data-m="${m}">${ic('plus')} Aggiungi</button>${eaten ? `<button class="btn ghost sm" data-a="mealMenu" data-m="${m}">Altro…</button>` : `<button class="btn ghost sm" data-a="planSheet">Modifica piano</button>`}</div>` : ''}
+  </div>`;
+}
+function kcalCard(k, big) {
+  const tot = totals(dayDiary(k).items), tg = targetFor(k);
+  if (!tg) return `<div class="card"><div class="between"><div><span class="stat">${fmtInt(tot.kcal)}</span><span class="small"> kcal</span></div><button class="btn sm" data-a="targetsSheet">Imposta obiettivi</button></div>${macroRows(tot, null)}</div>`;
+  const left = tg.kcal - tot.kcal;
+  return `<div class="card"><div class="between"><div><span class="stat${big ? '' : ' md'}">${fmtInt(tot.kcal)}</span><span class="small"> / ${fmtInt(tg.kcal)} kcal</span></div><div class="small" style="text-align:right">${left >= 0 ? `restano<br><b class="num" style="color:var(--text);font-size:17px">${fmtInt(left)}</b>` : `<span style="color:var(--warn)">oltre di<br><b class="num" style="font-size:17px">${fmtInt(-left)}</b></span>`}</div></div><div class="bar mt"><i style="width:${clamp(tot.kcal / tg.kcal * 100, 0, 100)}%;${left < 0 ? 'background:var(--warn)' : ''}"></i></div>${macroRows(tot, tg)}</div>`;
+}
 VIEWS.dieta = () => {
-  const k = ui.dietDate, d = dayDiary(k), tot = totals(d.items), tg = targetFor(k);
-  let h = `<div class="between" style="margin-top:4px"><button class="icon-btn" data-a="dietDay" data-d="-1">${ic('left')}</button><div class="center"><div style="font-weight:700;font-size:17px">${relDate(k)}</div><div class="small">${isTrainingDay(k) ? 'Giorno di allenamento' : 'Giorno di riposo'}</div></div><button class="icon-btn" data-a="dietDay" data-d="1">${ic('right')}</button></div>`;
-  h += `<div class="card mt">`;
-  if (tg) h += `<div class="between"><div><span class="stat">${fmtInt(tot.kcal)}</span><span class="small"> / ${fmtInt(tg.kcal)} kcal</span></div><div class="small" style="text-align:right">${tg.kcal - tot.kcal >= 0 ? `restano<br><b class="num" style="color:var(--text);font-size:17px">${fmtInt(tg.kcal - tot.kcal)}</b>` : `<span style="color:var(--warn)">oltre di<br><b class="num" style="font-size:17px">${fmtInt(tot.kcal - tg.kcal)}</b></span>`}</div></div><div class="bar mt"><i style="width:${clamp(tot.kcal / tg.kcal * 100, 0, 100)}%;${tot.kcal > tg.kcal ? 'background:var(--warn)' : ''}"></i></div>`;
-  else h += `<div class="between"><div><span class="stat">${fmtInt(tot.kcal)}</span><span class="small"> kcal</span></div><button class="btn sm" data-a="targetsSheet">Imposta obiettivi</button></div>`;
-  h += macroRows(tot, tg) + `</div><!--PLANDAY-->`;
-  for (const [m, label] of MEALS) {
-    const items = d.items.filter(i => i.meal === m), mt = totals(items);
-    h += `<div class="list"><div class="li" style="min-height:48px"><div class="grow"><b>${label}</b> ${items.length ? `<span class="small num">· ${fmtInt(mt.kcal)} kcal</span>` : ''}</div><button class="icon-btn" data-a="mealMenu" data-m="${m}">${ic('dots')}</button><button class="icon-btn" style="background:var(--accent);color:var(--accent-ink)" data-a="addFood" data-m="${m}">${ic('plus', 2.6)}</button></div>`;
-    h += items.map(i => `<div class="li tap" data-a="editItem" data-id="${i.id}"><div class="grow"><div class="ell">${esc(i.name)}</div><div class="small num">${qtyLbl(i.qty, i.unit)} · P ${fmtInt(i.p)} · C ${fmtInt(i.c)} · G ${fmtInt(i.f)}</div></div><b class="num">${fmtInt(i.kcal)}</b></div>`).join('');
-    const plan = planFor(k, m);
-    if (!items.length && plan.length) { const pt = totals(plan.map(it => freshItem(it))); h += `<div class="li" style="display:block"><div class="small">Da piano · ≈ ${fmtInt(pt.kcal)} kcal · P ${fmtInt(pt.p)} g</div><div style="font-size:14px;margin-top:3px;line-height:1.45">${plan.map(it => `${esc(freshItem(it).name)} <span class="num" style="color:var(--muted)">${qtyLbl(it.qty, it.unit)}</span>`).join(' · ')}</div><div class="row mt" style="gap:8px"><button class="btn sm primary grow" data-a="planEat" data-m="${m}">${ic('check', 2.6)} Mangiato come da piano</button><button class="btn sm" data-a="planSheet">Modifica</button></div></div>`; }
-    h += `</div>`;
-  }
-  if (!d.items.length && MEALS.some(([m]) => planFor(k, m).length)) h = h.replace('<!--PLANDAY-->', `<button class="btn block" data-a="planEatDay" style="margin-bottom:12px">${ic('check', 2.6)} Segna tutta la giornata come da piano</button>`);
-  if (!d.items.length) { const y = dayDiary(addDays(k, -1)); if (y.items.length) h += `<button class="btn block" data-a="copyDay">Copia tutta la giornata di ieri (${fmtInt(totals(y.items).kcal)} kcal)</button>`; }
+  const k = ui.dietDate, d = dayDiary(k);
+  let h = `<div class="between" style="margin-top:4px"><button class="icon-btn" data-a="dietDay" data-d="-1">${ic('left')}</button><div class="center"><div style="font-weight:750;font-size:18px">${relDate(k)}</div><div class="small">${isTrainingDay(k) ? '🏋️ Giorno di allenamento' : 'Giorno di riposo'}</div></div><button class="icon-btn" data-a="dietDay" data-d="1">${ic('right')}</button></div><div class="mt"></div>`;
+  h += kcalCard(k, true);
+  const hasPlanLeft = MEALS.some(([m]) => planFor(k, m).length && !d.items.some(i => i.meal === m));
+  if (hasPlanLeft && !d.items.length) h += `<button class="btn block" data-a="planEatDay" style="margin-bottom:12px">${ic('check', 2.6)} Segna tutta la giornata come da piano</button>`;
+  h += `<h2>Cosa mangi ${k === todayKey() ? 'oggi' : relDate(k).toLowerCase()}</h2>`;
+  const blocks = MEALS.map(([m, l]) => mealBlock(k, m, l, true)).join('');
+  h += blocks || `<div class="empty">Nessun piano per questo giorno.<br><button class="btn mt" data-a="planSheet">Imposta il piano</button></div>`;
+  const free = MEALS.filter(([m]) => !planFor(k, m).length && !d.items.some(i => i.meal === m));
+  if (free.length) h += `<div class="card tight"><div class="small" style="margin-bottom:8px">Fuori piano (spuntini, extra)</div><div class="row wrap" style="gap:8px">${free.map(([m, l]) => `<button class="btn sm" data-a="addFood" data-m="${m}">${ic('plus')} ${l}</button>`).join('')}</div></div>`;
+  if (!d.items.length) { const y = dayDiary(addDays(k, -1)); if (y.items.length) h += `<button class="btn ghost block" data-a="copyDay">Copia la giornata di ieri (${fmtInt(totals(y.items).kcal)} kcal)</button>`; }
   h += `<h2>Acqua</h2><div class="card"><div class="glasses">${Array.from({ length: Math.max(S.settings.waterTarget, d.water || 0) }, (_, i) => `<button class="glass ${i < (d.water || 0) ? 'on' : ''}" data-a="waterSet" data-n="${i + 1}">${ic('drop')}</button>`).join('')}<button class="glass" data-a="water" data-k="${k}" data-d="1">${ic('plus')}</button></div><div class="small mt">${d.water || 0} bicchieri (≈ ${fmt((d.water || 0) * 0.25, 2)} L)</div></div>`;
   if (S.settings.supplements.length) h += `<h2>Integratori</h2><div class="list">${S.settings.supplements.map(s => { const on = d.supps && d.supps[s]; return `<div class="li tap" data-a="supp" data-s="${esc(s)}"><span class="check ${on ? 'on' : ''}">${on ? ic('check', 3) : ''}</span><div class="grow">${esc(s)}</div></div>`; }).join('')}</div>`;
   return h;
@@ -561,37 +587,53 @@ function newSessionEx(exId, item, sid) {
 }
 const kgS = kg => kg ? fmt(kg) : 'CL';
 const exName = (x) => x.label || exById(x.exId).n;
-function openSession() { unlockAudio(); $('#session').hidden = false; document.body.style.overflow = 'hidden'; keepAwake(true); renderSession(); tick(); }
+function openSession() { unlockAudio(); $('#session').hidden = false; document.body.style.overflow = 'hidden'; keepAwake(true); renderSession(true); tick(); }
 function hideSession() { $('#session').hidden = true; document.body.style.overflow = ''; render(); tick(); }
 function routineItem(s, exId) { const r = S.routines.find(r => r.id === s.routineId); return r?.items.find(i => i.exId === exId); }
-function renderSession() {
+const currentEx = s => s.exercises.findIndex(ex => ex.sets.some(x => !x.done));
+const sessOpen = new Set();
+function renderSession(scrollToCurrent) {
   const s = activeSession(); const box = $('#session');
   if (!s) { box.hidden = true; return; }
   const rt = S.routines.find(r => r.id === s.routineId);
-  let h = `<div class="s-head"><div class="between"><button class="icon-btn" data-a="hideSession">${ic('down')}</button><div class="center grow"><div style="font-weight:700" class="ell">${esc(s.name)}</div><div class="small num" id="elapsed">${mmss((Date.now() - s.start) / 1000)}</div></div><button class="icon-btn" data-a="timerSheet">${ic('timer')}</button><button class="btn primary sm" data-a="finishSession">Fine</button></div></div>`;
-  if (rt && rt.note) h += `<details class="card tight" style="margin-bottom:12px"><summary style="font-weight:650">Indicazioni della seduta</summary><div class="small mt" style="color:var(--text);white-space:pre-line">${esc(rt.note)}</div></details>`;
+  const cur = currentEx(s), n = s.exercises.length;
+  let done = 0, tot = 0; s.exercises.forEach(ex => { tot += ex.sets.length; done += doneSets(ex).length; });
+  let h = `<div class="s-head"><div class="between"><button class="icon-btn" data-a="hideSession">${ic('down')}</button><div class="center grow" style="min-width:0"><div style="font-weight:750;font-size:16px" class="ell">${esc(rt?.short ? `${GIORNI[rt.days[0]] || ''} · ${rt.short}` : s.name)}</div><div class="small num">⏱ <span id="elapsed">${mmss((Date.now() - s.start) / 1000)}</span></div></div><button class="icon-btn" data-a="timerSheet">${ic('timer')}</button><button class="btn primary sm" data-a="finishSession">Fine</button></div>
+    <div class="sprog"><div class="bar"><i style="width:${tot ? done / tot * 100 : 0}%"></i></div><div class="between small" style="margin-top:6px"><span>${cur < 0 ? (n ? 'Tutti gli esercizi completati 🎉' : 'Aggiungi un esercizio') : `Esercizio <b style="color:var(--text)">${cur + 1}</b> di ${n}`}</span><span class="num"><b style="color:var(--text)">${done}</b> / ${tot} serie</span></div></div></div>`;
+  if (rt && rt.note) h += `<details class="card tight" style="margin-bottom:12px"><summary style="font-weight:650">Indicazioni della seduta</summary><div class="small mt" style="color:var(--text);white-space:pre-line;line-height:1.5">${esc(rt.note)}</div></details>`;
   s.exercises.forEach((ex, ei) => {
     const e = exById(ex.exId), last = lastSetsFor(ex.exId, s.id), item = routineItem(s, ex.exId) || ex;
+    const complete = ex.sets.length > 0 && ex.sets.every(x => x.done);
+    const reps = ex.repMin ? `${ex.repMin}${ex.repMax && ex.repMax !== ex.repMin ? '–' + ex.repMax : ''}` : '?';
+    if (complete && !sessOpen.has(ei)) {
+      h += `<div class="ex-card collapsed" id="ex${ei}" data-a="exToggle" data-ei="${ei}"><span class="ex-n ok">${ic('check', 3)}</span><div class="grow" style="min-width:0"><div class="ell" style="font-weight:700">${esc(exName(ex))}</div><div class="small num ell">${ex.sets.map(x => `${kgS(x.kg)}×${x.reps}`).join(' · ')}</div></div><span class="chev">›</span></div>`;
+      return;
+    }
     const sug = suggestion(item, ex.exId, s.id), note = S.exNotes[ex.exId];
-    const tech = item.note || ex.note, rir = item.rir || ex.rir, kgStart = item.kg ?? ex.kgStart;
-    const reps = ex.repMin ? `${ex.repMin}${ex.repMax && ex.repMax !== ex.repMin ? '–' + ex.repMax : ''}` : '';
-    h += `<div class="ex-card" id="ex${ei}"><div class="ex-top"><button data-a="exInfo" data-id="${ex.exId}">${thumb(e)}</button><div class="grow"><div style="font-weight:700;line-height:1.25">${esc(exName(ex))}</div><div class="small">${ex.sets.length} × ${reps || '?'} · <button class="link" data-a="exRest" data-ei="${ei}">${ic('timer', 2).replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${mmss(ex.rest)}</button>${rir ? ` · RIR ${esc(rir)}` : ''}</div></div><button class="icon-btn" data-a="exMenu" data-ei="${ei}">${ic('dots')}</button></div>`;
-    if (tech) h += `<div class="small mt" style="line-height:1.35">${esc(tech)}</div>`;
-    if (last || sug || note) h += `<div class="row wrap mt" style="gap:6px">${last ? `<span class="small">Ultima (${shortDate(last.session.date)}): <span class="num" style="color:var(--text)">${last.sets.map(x => `${kgS(x.kg)}×${x.reps}`).join(' · ')}</span></span>` : ''}${sug ? `<span class="tag acc">↑ ${sug.text}</span>` : ''}${note ? `<span class="tag">📝 ${esc(note)}</span>` : ''}</div>`;
-    h += `<div class="sets"><div class="set-h"><span class="center">Serie</span><span class="center">Precedente</span><span class="center">Kg</span><span class="center">Rip</span><span></span></div>`;
+    const tech = item.note || ex.note, rir = item.rir || ex.rir, kgStart = item.kg ?? ex.kgStart, isCur = ei === cur;
+    h += `<div class="ex-card ${isCur ? 'current' : ''}" id="ex${ei}">
+      ${isCur ? `<div class="ex-now">ORA</div>` : ''}
+      <div class="ex-top"><button data-a="exInfo" data-id="${ex.exId}" class="ex-img">${thumb(e, '', isCur)}</button><div class="grow" style="min-width:0"><div class="ex-title"><span class="ex-num">${ei + 1}</span>${esc(exName(ex))}</div><div class="small" style="margin-top:2px">${esc([e.t, e.e].filter(Boolean).join(' · '))}</div></div><button class="icon-btn" data-a="exMenu" data-ei="${ei}">${ic('dots')}</button></div>
+      <div class="ex-chips"><span class="xc"><b>${ex.sets.length} × ${reps}</b> rip</span><button class="xc" data-a="exRest" data-ei="${ei}">${ic('timer', 2.2)} <b>${mmss(ex.rest)}</b></button>${rir ? `<span class="xc">RIR <b>${esc(rir)}</b></span>` : ''}${sug ? `<span class="xc acc">↑ ${esc(sug.text)}</span>` : ''}</div>
+      ${tech ? `<div class="ex-note">${esc(tech)}</div>` : ''}
+      ${note ? `<div class="ex-note">📝 ${esc(note)}</div>` : ''}
+      ${last ? `<div class="small" style="margin-top:8px">Ultima volta (${shortDate(last.session.date)}): <b class="num" style="color:var(--text)">${last.sets.map(x => `${kgS(x.kg)}×${x.reps}`).join(' · ')}</b></div>` : ''}
+      <div class="sets"><div class="set-h"><span>Serie</span><span>Prima</span><span>Kg</span><span>Rip</span><span></span></div>`;
     let wn = 0;
     ex.sets.forEach((st, si) => {
       const p = last?.sets[si] || last?.sets[last.sets.length - 1];
       const ph = setPlaceholders(s, ei, si);
       const lbl = st.t === 'N' ? ++wn : st.t;
       const isPR = st.done && st.t !== 'R' && st.pr;
+      const nextSet = isCur && !st.done && ex.sets.findIndex(x => !x.done) === si;
       const prev = p ? `${kgS(p.kg)}×${p.reps}` : kgStart != null ? `${kgStart ? fmt(kgStart) + ' kg' : 'CL'}` : '–';
-      h += `<div class="set ${st.done ? 'done' : ''}"><button class="n ${st.t}" data-a="setMenu" data-ei="${ei}" data-si="${si}">${lbl}</button><span class="prev">${prev}${isPR ? `<br><span class="pr">🏆 record</span>` : ''}</span><input inputmode="decimal" data-in="setKg" data-ei="${ei}" data-si="${si}" value="${iv(st.kg)}" placeholder="${ph.kg == null ? 'kg' : ph.kg === 0 ? 'CL' : fmt(ph.kg)}"><input inputmode="numeric" data-in="setReps" data-ei="${ei}" data-si="${si}" value="${iv(st.reps)}" placeholder="${ph.reps == null ? 'rip' : ph.reps}"><button class="chk" data-a="setDone" data-ei="${ei}" data-si="${si}">${ic('check', 3)}</button></div>`;
+      h += `<div class="set ${st.done ? 'done' : ''} ${nextSet ? 'next' : ''}"><button class="n ${st.t}" data-a="setMenu" data-ei="${ei}" data-si="${si}">${lbl}</button><span class="prev">${prev}${isPR ? `<br><span class="pr">🏆 record</span>` : ''}</span><input inputmode="decimal" data-in="setKg" data-ei="${ei}" data-si="${si}" value="${iv(st.kg)}" placeholder="${ph.kg == null ? 'kg' : ph.kg === 0 ? 'CL' : fmt(ph.kg)}"><input inputmode="numeric" data-in="setReps" data-ei="${ei}" data-si="${si}" value="${iv(st.reps)}" placeholder="${ph.reps == null ? 'rip' : ph.reps}"><button class="chk" data-a="setDone" data-ei="${ei}" data-si="${si}">${ic('check', 3)}</button></div>`;
     });
-    h += `</div><button class="btn sm block" data-a="addSet" data-ei="${ei}">${ic('plus')} Aggiungi serie</button></div>`;
+    h += `</div><div class="row" style="gap:8px"><button class="btn sm grow" data-a="addSet" data-ei="${ei}">${ic('plus')} Serie</button>${complete ? `<button class="btn sm grow" data-a="exToggle" data-ei="${ei}">Chiudi</button>` : ''}</div></div>`;
   });
   h += `<button class="btn block" data-a="sessionAddEx">${ic('plus')} Aggiungi esercizio</button><button class="btn ghost block mt2 danger" data-a="cancelSession">Annulla allenamento</button>`;
   const st = box.scrollTop; box.innerHTML = h; box.scrollTop = st;
+  if (scrollToCurrent && cur >= 0) setTimeout(() => { const c = $('#ex' + cur); c && c.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 60);
 }
 function setPlaceholders(s, ei, si) {
   const ex = s.exercises[ei], st = ex.sets[si], last = lastSetsFor(ex.exId, s.id), item = routineItem(s, ex.exId) || ex;
@@ -615,9 +657,11 @@ function completeSet(ei, si) {
     if (st.pr) toast(`🏆 Nuovo record su ${esc(exName(ex))}!`, 3000);
   }
   save(); buzz(30);
-  const isLast = ex.sets.every(x => x.done) && ei === s.exercises.length - 1;
-  if (!isLast) startTimer(ex.rest || S.settings.restDefault);
-  renderSession();
+  const exDone = ex.sets.every(x => x.done), allDone = currentEx(s) < 0;
+  if (!allDone) startTimer(ex.rest || S.settings.restDefault);
+  if (exDone) sessOpen.delete(ei);
+  renderSession(exDone);
+  if (allDone) toast('Tutte le serie fatte! Premi "Fine" per salvare 💪', 3500);
 }
 function finishSession() {
   const s = activeSession(); if (!s) return;
@@ -930,6 +974,7 @@ const A = {
   supp: el => { const d = dayDiary(ui.dietDate, true); d.supps = d.supps || {}; d.supps[el.dataset.s] = !d.supps[el.dataset.s]; save(); render(); },
   dietDay: el => { ui.dietDate = addDays(ui.dietDate, +el.dataset.d); render(); },
   addFood: el => addFoodSheet(el.dataset.m, ui.dietDate),
+  planEatK: el => { eatPlan(el.dataset.k, el.dataset.m); render(); buzz(20); },
   planEat: el => { eatPlan(ui.dietDate, el.dataset.m); render(); toast('Segnato come da piano'); },
   planEatDay: () => { MEALS.forEach(([m]) => { if (!dayDiary(ui.dietDate).items.some(i => i.meal === m)) eatPlan(ui.dietDate, m); }); render(); toast('Giornata segnata come da piano'); },
   planSheet: () => planSheet(fromKey(ui.dietDate).getDay()),
@@ -953,6 +998,7 @@ const A = {
   copyDay: () => { const k = ui.dietDate, y = dayDiary(addDays(k, -1)), d = dayDiary(k, true); y.items.forEach(i => d.items.push({ ...i, id: uid() })); save(); render(); toast('Giornata copiata'); },
   // sessione
   setDone: el => completeSet(+el.dataset.ei, +el.dataset.si),
+  exToggle: el => { const ei = +el.dataset.ei; sessOpen.has(ei) ? sessOpen.delete(ei) : sessOpen.add(ei); renderSession(); },
   addSet: el => { const s = activeSession(), ex = s.exercises[+el.dataset.ei]; ex.sets.push({ kg: null, reps: null, t: 'N', done: false }); save(); renderSession(); },
   setMenu: el => {
     const s = activeSession(), ex = s.exercises[+el.dataset.ei], si = +el.dataset.si, st = ex.sets[si];
